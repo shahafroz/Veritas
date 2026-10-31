@@ -54,12 +54,12 @@ jobs:
         # --load: put the image in the local image store (some runner builders only keep it in cache)
         run: docker buildx build --load -t veritas:ci .
       - name: Container smoke test
+        # Failures are echoed as ::error:: annotations, which (unlike step logs) are readable via the public API.
         run: |
-          docker image inspect veritas:ci --format 'image {{.Id}}'
-          docker run -d --name v -p 8000:8000 -e JWT_SECRET=ci-secret-ci-secret-ci-secret-ci veritas:ci
-          for i in $(seq 1 45); do curl -fs localhost:8000/healthz && break; sleep 1; done
-          if ! curl -fs localhost:8000/healthz | grep '"ok"'; then
-            echo "::error::container did not become healthy; logs follow"
-            docker logs v
-            exit 1
-          fi
+          fail() { echo "::error title=$1::$(printf '%s' "$2" | tail -c 1500 | tr '\n' ' ')"; exit 1; }
+          out=$(docker image inspect veritas:ci --format '{{.Id}}' 2>&1) || fail "image missing" "$out"
+          out=$(docker run -d --name v -p 18080:8000 -e JWT_SECRET=ci-secret-ci-secret-ci-secret-ci veritas:ci 2>&1) \
+            || fail "docker run failed" "$out"
+          for i in $(seq 1 45); do curl -fs localhost:18080/healthz && break; sleep 1; done
+          curl -fs localhost:18080/healthz | grep -q '"ok"' || fail "container not healthy" "$(docker logs v 2>&1)"
+          echo "healthy: $(curl -fs localhost:18080/healthz)"
