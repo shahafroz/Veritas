@@ -8,8 +8,6 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    env:
-      HAS_LLM_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     defaults:
       run:
         working-directory: backend
@@ -25,11 +23,7 @@ jobs:
         run: pytest
       - name: Offline eval quality gate (fails the build on regression)
         run: python -m evals.run_evals
-      - name: LLM eval (main only, needs secret)
-        if: github.ref == 'refs/heads/main' && env.HAS_LLM_KEY == 'true'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python -m evals.run_evals --llm --judge --out evals/reports/llm.json
+      # The Claude eval lives in llm-eval.yml and runs only on demand (Actions > llm-eval > Run workflow).
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -64,7 +58,8 @@ jobs:
           docker image inspect veritas:ci --format 'image {{.Id}}'
           docker run -d --name v -p 8000:8000 -e JWT_SECRET=ci-secret-ci-secret-ci-secret-ci veritas:ci
           for i in $(seq 1 45); do curl -fs localhost:8000/healthz && break; sleep 1; done
-          curl -fs localhost:8000/healthz | grep '"ok"'
-      - name: Container logs
-        if: failure()
-        run: docker logs v || true
+          if ! curl -fs localhost:8000/healthz | grep '"ok"'; then
+            echo "::error::container did not become healthy; logs follow"
+            docker logs v
+            exit 1
+          fi

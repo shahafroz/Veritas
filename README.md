@@ -138,7 +138,9 @@ docker compose --profile observability up -d   # + Prometheus on :9090
 2. In Render, choose **New → Blueprint** and select the repo. `render.yaml` provisions a Docker web service with a persistent disk, health checks, and a generated `JWT_SECRET`.
 3. Add `ANTHROPIC_API_KEY` in the dashboard.
 
-**CI/CD** (`.github/workflows/ci.yml`): every PR runs the tests, the eval quality gate, the frontend build, and a production-image smoke test. On `main`, if the `ANTHROPIC_API_KEY` secret is set, it also runs the Claude eval with the LLM judge and uploads the reports.
+**CI/CD** (`.github/workflows/ci.yml`): every push and PR runs the tests, the offline eval quality gate, the frontend build, and a production-image smoke test. No API key is needed.
+
+**Claude eval** (`.github/workflows/llm-eval.yml`): on demand only, since it spends API credit. Add an `ANTHROPIC_API_KEY` repository secret, then go to **Actions → llm-eval → Run workflow** and pick the model (Haiku 5.5 by default, about $0.03 a run) and whether to add the LLM judge.
 
 ## Project layout
 

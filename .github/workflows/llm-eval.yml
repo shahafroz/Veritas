@@ -1,0 +1,49 @@
+name: llm-eval
+
+# Runs the golden set with Claude generating answers (and optionally grading them).
+# On demand only, since it spends API credit: Actions > llm-eval > Run workflow.
+# Needs the ANTHROPIC_API_KEY repository secret (Settings > Secrets and variables > Actions).
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Claude model that answers (and judges)
+        default: claude-haiku-5-5
+        type: choice
+        options: [claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5]
+      judge:
+        description: Also grade faithfulness with an LLM judge
+        default: true
+        type: boolean
+
+jobs:
+  llm-eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LLM_MODEL: ${{ inputs.model }}
+    steps:
+      - name: Check the API key secret is set
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Add an ANTHROPIC_API_KEY repository secret first (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Claude eval quality gate
+        run: python -m evals.run_evals --llm ${{ inputs.judge && '--judge' || '' }} --out evals/reports/llm.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: llm-eval-report
+          path: backend/evals/reports/llm.json
