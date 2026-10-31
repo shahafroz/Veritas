@@ -57,9 +57,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build production image
-        run: docker build -t veritas:${{ github.sha }} .
+        # --load: put the image in the local image store (some runner builders only keep it in cache)
+        run: docker buildx build --load -t veritas:ci .
       - name: Container smoke test
         run: |
-          docker run -d --name v -p 8000:8000 -e JWT_SECRET=ci-secret-ci-secret-ci-secret-ci veritas:${{ github.sha }}
-          for i in $(seq 1 30); do curl -fs localhost:8000/healthz && break; sleep 1; done
+          docker image inspect veritas:ci --format 'image {{.Id}}'
+          docker run -d --name v -p 8000:8000 -e JWT_SECRET=ci-secret-ci-secret-ci-secret-ci veritas:ci
+          for i in $(seq 1 45); do curl -fs localhost:8000/healthz && break; sleep 1; done
           curl -fs localhost:8000/healthz | grep '"ok"'
+      - name: Container logs
+        if: failure()
+        run: docker logs v || true
