@@ -1,0 +1,25 @@
+# Render Blueprint: New > Blueprint > pick this repo. Builds the Dockerfile and mounts a persistent disk.
+services:
+  - type: web
+    name: veritas
+    runtime: docker
+    plan: starter            # persistent disks need a paid instance
+    healthCheckPath: /healthz
+    autoDeploy: true         # deploys only after CI (tests + eval gate) passes on main
+    disk:
+      name: veritas-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ANTHROPIC_API_KEY
+        sync: false          # set in the dashboard
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: SEED_DEMO
+        value: "true"        # set to false for a real tenant-only deployment
+      - key: CORS_ORIGINS
+        value: https://veritas.onrender.com
+      - key: RATE_LIMIT_PER_MIN
+        value: "20"
