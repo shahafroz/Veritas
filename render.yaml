@@ -1,20 +1,19 @@
-# Render Blueprint: New > Blueprint > pick this repo. Builds the Dockerfile and mounts a persistent disk.
+# Render Blueprint: New > Blueprint > pick this repo. Builds the Dockerfile.
+# Data lives in an external Postgres (e.g. Neon's free tier), so the free web plan works: no disk needed.
 services:
   - type: web
     name: veritas
     runtime: docker
-    plan: starter            # persistent disks need a paid instance
+    plan: free               # sleeps when idle; the first request after that takes ~30-60s
     healthCheckPath: /healthz
     autoDeploy: true         # deploys only after CI (tests + eval gate) passes on main
-    disk:
-      name: veritas-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
+      - key: DATABASE_URL
+        sync: false          # paste the Postgres connection string in the dashboard
       - key: JWT_SECRET
         generateValue: true
       - key: ANTHROPIC_API_KEY
-        sync: false          # set in the dashboard
+        sync: false          # optional; without it answers are extractive
       - key: VOYAGE_API_KEY
         sync: false
       - key: SEED_DEMO

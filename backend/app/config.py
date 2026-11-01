@@ -15,6 +15,8 @@ def _bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     env: str = os.environ.get("VERITAS_ENV", "dev")
+    # Postgres when DATABASE_URL is set (e.g. Neon, Supabase, RDS); otherwise a local SQLite file.
+    database_url: str = os.environ.get("DATABASE_URL", "")
     db_path: Path = Path(os.environ.get("VERITAS_DB", Path(__file__).resolve().parent.parent / "data" / "veritas.db"))
     jwt_secret: str = os.environ.get("JWT_SECRET") or secrets.token_urlsafe(48)
     jwt_ttl_minutes: int = int(os.environ.get("JWT_TTL_MINUTES", "480"))

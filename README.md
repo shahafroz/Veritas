@@ -95,6 +95,15 @@ Current results (offline profile: extractive generator, `hashing-1024` embedder)
 
 `evals/thresholds.json` holds separate `extractive` and `llm` gate profiles. CI fails the build if any metric regresses, and the hard governance metrics have zero tolerance: ACL leakage must be exactly 0.
 
+## Storage
+
+The same code runs on two databases:
+
+- **Postgres** in production (`DATABASE_URL`, e.g. Neon or Supabase). Connections are pooled. The audit log's append-only rule is enforced by PL/pgSQL triggers that also block `TRUNCATE`. Writers take a transaction-scoped advisory lock, so the hash chain stays linear even with several app replicas.
+- **SQLite** for local development and single-node installs (the default when `DATABASE_URL` is unset).
+
+App code writes one portable SQL dialect. A thin adapter converts placeholders and `INSERT ... RETURNING` for Postgres. CI runs the full test suite and the eval gate on both databases.
+
 ## Run locally
 
 ```bash
@@ -103,6 +112,7 @@ cd backend
 python -m venv .venv && .venv/Scripts/activate   # macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
 pytest                                  # 38 tests: RBAC, ABAC, audit tamper detection, PII, injection, SSE, traces
+# TEST_DATABASE_URL=postgresql://... pytest   # same suite on Postgres (wipes that database's public schema)
 uvicorn app.main:app --port 8000
 
 # frontend (separate terminal)
@@ -132,13 +142,13 @@ docker compose up --build -d
 docker compose --profile observability up -d   # + Prometheus on :9090
 ```
 
-**Render** (managed):
+**Render + Neon** (managed, free tiers):
 
-1. Push this repo to GitHub.
-2. In Render, choose **New → Blueprint** and select the repo. `render.yaml` provisions a Docker web service with a persistent disk, health checks, and a generated `JWT_SECRET`.
-3. Add `ANTHROPIC_API_KEY` in the dashboard.
+1. Create a free Postgres database on [Neon](https://neon.tech) and copy its connection string.
+2. In Render, choose **New → Blueprint** and select this repo. `render.yaml` provisions a Docker web service with health checks and a generated `JWT_SECRET`.
+3. Paste the connection string as `DATABASE_URL`. Tables are created on first start. Optionally add `ANTHROPIC_API_KEY`.
 
-**CI/CD** (`.github/workflows/ci.yml`): every push and PR runs the tests, the offline eval quality gate, the frontend build, and a production-image smoke test. No API key is needed.
+**CI/CD** (`.github/workflows/ci.yml`): every push and PR runs the tests and the offline eval quality gate on both SQLite and Postgres, the frontend build, and a production-image smoke test. No API key is needed.
 
 **Claude eval** (`.github/workflows/llm-eval.yml`): on demand only, since it spends API credit. Add an `ANTHROPIC_API_KEY` repository secret, then go to **Actions → llm-eval → Run workflow** and pick the model (Haiku 5.5 by default, about $0.03 a run) and whether to add the LLM judge.
 
@@ -146,6 +156,7 @@ docker compose --profile observability up -d   # + Prometheus on :9090
 
 ```
 backend/app/
+  db.py           Postgres (pooled) or SQLite behind one portable SQL adapter
   main.py         REST + SSE API, RBAC-guarded routes, metrics, SPA hosting
   security.py     PBKDF2 passwords, JWT, role→permission map, clearance levels
   governance.py   PII redaction, injection detection, hash-chained audit, rate limiter
@@ -160,7 +171,7 @@ frontend/src/     React + TS: chat, knowledge base, quality dashboard, governanc
 
 ## Known limitations / next steps
 
-- SQLite + in-process index fits a single instance. To scale out, move to Postgres + pgvector and an external rate limiter (Redis).
+- The search index lives in each app process, rebuilt from the database. To scale out, move vectors into pgvector and the rate limiter into Redis.
 - The local hashing embedder is lexical. Semantic recall on paraphrases needs Voyage (or another embedding API).
 - Injection detection is pattern-based. A classifier model would catch obfuscated attacks.
 - SSO (SAML/OIDC) and SCIM provisioning would replace password auth for real enterprise tenants.

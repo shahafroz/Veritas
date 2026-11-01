@@ -6,6 +6,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-}   # empty = SQLite on the veritas-data volume
       SEED_DEMO: ${SEED_DEMO:-true}
       CORS_ORIGINS: http://localhost:8000
     volumes: ["veritas-data:/data"]

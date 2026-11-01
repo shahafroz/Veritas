@@ -30,6 +30,37 @@ jobs:
           name: eval-reports
           path: backend/evals/reports/
 
+  # Same suite against a real Postgres, the production database.
+  backend-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: veritas
+          POSTGRES_PASSWORD: veritas
+          POSTGRES_DB: veritas_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U veritas" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://veritas:veritas@localhost:5432/veritas_test
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Unit + API tests on Postgres
+        run: pytest
+      - name: Offline eval quality gate on Postgres
+        run: DATABASE_URL=$TEST_DATABASE_URL python -m evals.run_evals --out evals/reports/postgres.json
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -46,7 +77,7 @@ jobs:
       - run: npm run build
 
   image:
-    needs: [backend, frontend]
+    needs: [backend, backend-postgres, frontend]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

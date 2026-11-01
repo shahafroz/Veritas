@@ -1,4 +1,3 @@
-import sqlite3
 
 import pytest
 
@@ -36,17 +35,17 @@ def test_audit_chain_detects_tampering(client):
     assert governance.verify_audit_chain(org_id)["valid"]
 
     with db.connect() as conn:
-        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        with pytest.raises(Exception, match="append-only"):
             conn.execute("UPDATE audit_log SET detail = '{}' WHERE org_id = ?", (org_id,))
     # Even an attacker with raw DB access who drops the trigger is caught by the hash chain.
     with db.connect() as conn:
-        conn.execute("DROP TRIGGER audit_no_update")
+        conn.execute("DROP TRIGGER audit_no_update" + (" ON audit_log" if db.is_postgres() else ""))
         conn.execute("UPDATE audit_log SET detail = '{\"i\": 42}' WHERE org_id = ? AND resource = 'thing:1'",
                      (org_id,))
     result = governance.verify_audit_chain(org_id)
     assert result["valid"] is False and result["broken_at_id"] is not None
     with db.connect() as conn:
-        conn.executescript(db.SCHEMA)  # restore trigger for other tests
+        conn.apply_schema()  # restore trigger for other tests
 
 
 def test_token_bucket_limits_then_refills():

@@ -39,7 +39,7 @@ def seed_demo(indexes: IndexManager) -> int:
         org = conn.execute("SELECT id FROM orgs WHERE name = ?", (DEMO_ORG,)).fetchone()
         if org:
             return org["id"]
-        org_id = conn.execute("INSERT INTO orgs (name, monthly_budget_usd) VALUES (?, 25)", (DEMO_ORG,)).lastrowid
+        org_id = conn.insert("INSERT INTO orgs (name, monthly_budget_usd) VALUES (?, 25)", (DEMO_ORG,))
         for name, email, role, clearance in DEMO_USERS:
             conn.execute("INSERT INTO users (org_id, email, name, password_hash, role, clearance) "
                          "VALUES (?, ?, ?, ?, ?, ?)",

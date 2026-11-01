@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
     global indexes
     if settings.env == "prod" and not os.environ.get("JWT_SECRET"):
         raise RuntimeError("JWT_SECRET must be set in production (sessions would not survive restarts)")
-    db.init(settings.db_path)
+    db.init(settings.database_url or settings.db_path)
     indexes = IndexManager()
     purge_expired_queries()
     if settings.seed_demo:
@@ -47,8 +47,10 @@ async def lifespan(app: FastAPI):
 
         seed_demo(indexes)
     log.info(json.dumps({"event": "startup", "embedder": indexes.embedder.name,
-                         "llm": settings.llm_model if settings.llm_enabled else "extractive"}))
+                         "llm": settings.llm_model if settings.llm_enabled else "extractive",
+                         "db": "postgres" if db.is_postgres() else "sqlite"}))
     yield
+    db.close()
 
 
 app = FastAPI(title="Veritas", version="1.0.0", lifespan=lifespan)
@@ -74,8 +76,7 @@ async def request_context(request: Request, call_next):
 
 def purge_expired_queries() -> None:
     with db.write() as conn:
-        conn.execute("DELETE FROM queries WHERE created_at < datetime('now', ?)",
-                     (f"-{settings.query_retention_days} days",))
+        conn.execute("DELETE FROM queries WHERE created_at < ?", (db.days_ago(settings.query_retention_days),))
 
 
 # --- schemas ------------------------------------------------------------------------------------
@@ -146,10 +147,10 @@ def register_org(body: RegisterOrg):
             raise HTTPException(409, "Email already registered")
         if conn.execute("SELECT 1 FROM orgs WHERE name = ?", (body.org_name,)).fetchone():
             raise HTTPException(409, "Organization name taken")
-        org_id = conn.execute("INSERT INTO orgs (name) VALUES (?)", (body.org_name,)).lastrowid
-        user_id = conn.execute(
+        org_id = conn.insert("INSERT INTO orgs (name) VALUES (?)", (body.org_name,))
+        user_id = conn.insert(
             "INSERT INTO users (org_id, email, name, password_hash, role, clearance) VALUES (?, ?, ?, ?, ?, ?)",
-            (org_id, body.email, body.name, hash_password(body.password), "admin", "restricted")).lastrowid
+            (org_id, body.email, body.name, hash_password(body.password), "admin", "restricted"))
     governance.audit(org_id, user_id, "org.create", f"org:{org_id}", {"name": body.org_name})
     return {"token": issue_token(user_id)}
 
@@ -284,8 +285,9 @@ def feedback(query_id: int, body: Feedback, p: Principal = Depends(require(Perm.
         row = conn.execute("SELECT user_id FROM queries WHERE id = ? AND org_id = ?", (query_id, p.org_id)).fetchone()
         if row is None or row["user_id"] != p.user_id:
             raise HTTPException(404, "Query not found")
-        conn.execute("INSERT OR REPLACE INTO feedback (query_id, user_id, rating, comment) VALUES (?, ?, ?, ?)",
-                     (query_id, p.user_id, body.rating, body.comment))
+        conn.execute("INSERT INTO feedback (query_id, user_id, rating, comment) VALUES (?, ?, ?, ?) "
+                     "ON CONFLICT (query_id, user_id) DO UPDATE SET rating = excluded.rating, "
+                     "comment = excluded.comment", (query_id, p.user_id, body.rating, body.comment))
     metrics.inc("veritas_feedback_total", {"rating": "up" if body.rating > 0 else "down"})
 
 
@@ -312,9 +314,9 @@ def create_user(body: NewUser, p: Principal = Depends(require(Perm.MANAGE_USERS)
     with db.write() as conn:
         if conn.execute("SELECT 1 FROM users WHERE email = ?", (body.email,)).fetchone():
             raise HTTPException(409, "Email already registered")
-        uid = conn.execute(
+        uid = conn.insert(
             "INSERT INTO users (org_id, email, name, password_hash, role, clearance) VALUES (?, ?, ?, ?, ?, ?)",
-            (p.org_id, body.email, body.name, hash_password(body.password), body.role, body.clearance)).lastrowid
+            (p.org_id, body.email, body.name, hash_password(body.password), body.role, body.clearance))
         row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
     governance.audit(p.org_id, p.user_id, "user.create", f"user:{uid}",
                      {"email": body.email, "role": body.role, "clearance": body.clearance})
@@ -400,13 +402,14 @@ def audit_export(p: Principal = Depends(require(Perm.READ_AUDIT))):
 
 @app.get("/api/analytics")
 def analytics(days: int = 14, p: Principal = Depends(require(Perm.READ_ANALYTICS))):
-    window = f"-{max(1, min(days, 90))} days"
+    since = db.days_ago(max(1, min(days, 90)))
     with db.connect() as conn:
         rows = conn.execute(
             "SELECT latency_ms, abstained, groundedness, cost_usd, input_tokens, output_tokens, flagged, mode, "
-            "date(created_at) AS day, citations FROM queries WHERE org_id = ? AND created_at >= datetime('now', ?)",
-            (p.org_id, window)).fetchall()
-        fb = conn.execute("SELECT SUM(rating > 0) AS up, SUM(rating < 0) AS down FROM feedback f JOIN queries q "
+            "substr(created_at, 1, 10) AS day, citations FROM queries WHERE org_id = ? AND created_at >= ?",
+            (p.org_id, since)).fetchall()
+        fb = conn.execute("SELECT SUM(CASE WHEN rating > 0 THEN 1 ELSE 0 END) AS up, "
+                          "SUM(CASE WHEN rating < 0 THEN 1 ELSE 0 END) AS down FROM feedback f JOIN queries q "
                           "ON q.id = f.query_id WHERE q.org_id = ?", (p.org_id,)).fetchone()
         docs = {r["id"]: r["title"] for r in conn.execute("SELECT c.id, d.title FROM chunks c JOIN documents d "
                                                           "ON d.id = c.doc_id WHERE c.org_id = ?", (p.org_id,))}
@@ -504,8 +507,8 @@ def traces_summary(days: int = 14, p: Principal = Depends(require(Perm.READ_ANAL
     with db.connect() as conn:
         rows = conn.execute(
             "SELECT id, abstained, refusal_reason, latency_ms, cost_usd, input_tokens, output_tokens, trace "
-            "FROM queries WHERE org_id = ? AND trace IS NOT NULL AND created_at >= datetime('now', ?) ORDER BY id",
-            (p.org_id, f"-{max(1, min(days, 90))} days")).fetchall()
+            "FROM queries WHERE org_id = ? AND trace IS NOT NULL AND created_at >= ? ORDER BY id",
+            (p.org_id, db.days_ago(max(1, min(days, 90))))).fetchall()
     traces = [json.loads(r["trace"]) for r in rows]
 
     def pct(values: list[float], q: float) -> float:

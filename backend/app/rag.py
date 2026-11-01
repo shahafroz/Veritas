@@ -41,7 +41,7 @@ def ingest_document(indexes: IndexManager, principal: Principal, filename: str, 
         raise PermissionError(f"Your clearance '{principal.clearance}' cannot classify a document as "
                               f"'{classification}'")
     sha = hashlib.sha256(data).hexdigest()
-    text = extract_text(filename, data)
+    text = extract_text(filename, data).replace("\x00", "")  # Postgres TEXT rejects NUL (seen in some PDFs)
     if not title:
         h1 = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
         title = h1.group(1) if h1 else filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ")
@@ -65,12 +65,11 @@ def ingest_document(indexes: IndexManager, principal: Principal, filename: str, 
     vectors = indexes.embed_chunks([f"{c.heading}\n{c.text}" for c in chunks])
 
     with db.write() as conn:
-        cur = conn.execute(
+        doc_id = conn.insert(
             "INSERT INTO documents (org_id, title, filename, classification, sha256, uploaded_by, n_chunks, "
             "pii_redactions, quarantined_chunks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (principal.org_id, title, filename, classification, sha, principal.user_id, len(chunks),
              sum(pii_counts.values()), len(quarantined)))
-        doc_id = cur.lastrowid
         conn.executemany(
             "INSERT INTO chunks (doc_id, org_id, ord, heading, text, classification, quarantined, embedder, "
             "embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -91,7 +90,7 @@ def ingest_document(indexes: IndexManager, principal: Principal, filename: str, 
 def month_to_date_cost(org_id: int) -> float:
     with db.connect() as conn:
         row = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM queries WHERE org_id = ? AND "
-                           "created_at >= date('now', 'start of month')", (org_id,)).fetchone()
+                           "created_at >= ?", (org_id, db.month_start())).fetchone()
     return float(row["c"])
 
 
@@ -194,7 +193,7 @@ def answer_stream(indexes: IndexManager, principal: Principal, question: str, *,
     query_id = None
     if log:
         with db.write() as conn:
-            query_id = conn.execute(
+            query_id = conn.insert(
                 "INSERT INTO queries (org_id, user_id, question, answer, citations, retrieved, mode, model, "
                 "latency_ms, input_tokens, output_tokens, cost_usd, groundedness, abstained, flagged, "
                 "refusal_reason, trace) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -202,7 +201,7 @@ def answer_stream(indexes: IndexManager, principal: Principal, question: str, *,
                  json.dumps([c["chunk_id"] for c in citations]), json.dumps([h.chunk_id for h in hits]),
                  gen.mode, gen.model, latency_ms, gen.input_tokens, gen.output_tokens, cost, groundedness,
                  int(abstained), json.dumps(flagged) if flagged else None, refusal_reason,
-                 json.dumps(trace))).lastrowid
+                 json.dumps(trace)))
         governance.audit(principal.org_id, principal.user_id, "query", f"query:{query_id}", {
             "clearance": principal.clearance, "retrieved_docs": sorted({h.doc_id for h in hits}),
             "cited_docs": sorted({c["doc_id"] for c in citations}), "abstained": abstained, **flagged})

@@ -68,7 +68,7 @@ def judge(question: str, answer: str, sources: list[dict]) -> dict:
 
 
 def run(use_llm: bool, use_judge: bool) -> dict:
-    db.init(Path(os.environ["VERITAS_DB"]))
+    db.init(settings.database_url or Path(os.environ["VERITAS_DB"]))
     indexes = IndexManager()
     org_id = seed_demo(indexes)
     with db.connect() as conn:
